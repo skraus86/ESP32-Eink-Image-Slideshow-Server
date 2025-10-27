@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ESP32 eInk Slideshow</title>
+  <style>
+    body { font-family: sans-serif; background: #fafafa; margin: 20px; }
+    h2 { margin-top: 0; }
+    #preview { border: 1px solid #ccc; width: 400px; height: 240px; object-fit: contain; background: white; }
+    .file-list { margin-top: 10px; }
+    button { margin: 4px; padding: 6px 10px; }
+  </style>
+</head>
+<body>
+  <h2>ESP32 eInk Slideshow Manager</h2>
+  <input type="file" id="fileInput" accept="image/*">
+  <br><br>
+  <canvas id="canvas" width="800" height="480" style="display:none"></canvas>
+  <img id="preview" src="" alt="Preview">
+  <br>
+  <button id="uploadBtn">Upload to SD</button>
+  <button onclick="fetch('/start')">Start Slideshow</button>
+  <button onclick="fetch('/stop')">Stop Slideshow</button>
+
+  <h3>Stored Images</h3>
+  <div id="fileList" class="file-list"></div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const fileInput = document.getElementById('fileInput');
+    const preview = document.getElementById('preview');
+    const fileList = document.getElementById('fileList');
+    let selectedFile;
+
+    // Fetch and display list of files on SD card
+    async function fetchFiles() {
+      const res = await fetch('/list');
+      const files = await res.json();
+      fileList.innerHTML = '';
+      files.forEach(name => {
+        const div = document.createElement('div');
+        div.textContent = name + ' ';
+        const del = document.createElement('button');
+        del.textContent = 'Delete';
+        del.onclick = async () => {
+          await fetch('/delete?name=' + encodeURIComponent(name));
+          fetchFiles();
+        };
+        div.appendChild(del);
+        fileList.appendChild(div);
+      });
+    }
+
+    // Image selection and Floyd–Steinberg dithering
+    fileInput.onchange = e => {
+      selectedFile = e.target.files[0];
+      if (!selectedFile) return;
+
+      const reader = new FileReader();
+      reader.onload = evt => {
+        const img = new Image();
+        img.onload = () => {
+          // Draw the image to canvas at eInk resolution
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const data = imageData.data;
+
+          // Create grayscale array
+          const gray = [];
+          for (let y = 0; y < canvas.height; y++) {
+            gray[y] = [];
+            for (let x = 0; x < canvas.width; x++) {
+              const i = (y * canvas.width + x) * 4;
+              const avg = data[i]*0.3 + data[i+1]*0.59 + data[i+2]*0.11;
+              gray[y][x] = avg;
+            }
+          }
+
+          // Apply Floyd–Steinberg dithering
+          for (let y = 0; y < canvas.height; y++) {
+            for (let x = 0; x < canvas.width; x++) {
+              const oldPixel = gray[y][x];
+              const newPixel = oldPixel < 128 ? 0 : 255;
+              const error = oldPixel - newPixel;
+              gray[y][x] = newPixel;
+
+              if (x + 1 < canvas.width) gray[y][x + 1] += error * 7 / 16;
+              if (y + 1 < canvas.height) {
+                if (x > 0) gray[y+1][x-1] += error * 3 / 16;
+                gray[y+1][x] += error * 5 / 16;
+                if (x + 1 < canvas.width) gray[y+1][x+1] += error * 1 / 16;
+              }
+            }
+          }
+
+          // Write dithered pixels back to canvas
+          for (let y = 0; y < canvas.height; y++) {
+            for (let x = 0; x < canvas.width; x++) {
+              const i = (y * canvas.width + x) * 4;
+              const bw = gray[y][x];
+              data[i] = data[i+1] = data[i+2] = bw;
+              data[i+3] = 255;
+            }
+          }
+
+          ctx.putImageData(imageData, 0, 0);
+          preview.src = canvas.toDataURL('image/png');
+        };
+        img.src = evt.target.result;
+      };
+      reader.readAsDataURL(selectedFile);
+    };
+
+    // Upload button: sends 1-bit BMP to ESP32
+    document.getElementById('uploadBtn').onclick = async () => {
+      if (!selectedFile) return alert('Select a file first!');
+      canvas.toBlob(async blob => {
+        const formData = new FormData();
+        formData.append('file', blob, selectedFile.name.replace(/\.[^.]+$/, '') + '.bmp');
+        await fetch('/upload', { method: 'POST', body: formData });
+        alert('Uploaded!');
+        fetchFiles();
+      }, 'image/bmp');
+    };
+
+    // Initial load
+    fetchFiles();
+  </script>
+</body>
+</html>
