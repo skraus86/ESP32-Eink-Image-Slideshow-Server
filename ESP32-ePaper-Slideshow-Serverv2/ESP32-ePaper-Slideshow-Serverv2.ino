@@ -25,6 +25,7 @@ GxEPD2_BW<GxEPD2_750_T7, GxEPD2_750_T7::HEIGHT> display(GxEPD2_750_T7(EPD_CS, EP
 
 // ===== SD SPI BUS =====
 SPIClass sdSPI(VSPI);
+SPIClass epdSPI(VSPI); // dedicated for ePaper
 
 AsyncWebServer server(80);
 const char* ssid = "ESP32-eInk";
